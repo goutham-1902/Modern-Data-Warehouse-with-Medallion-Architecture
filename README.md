@@ -174,23 +174,6 @@ Ensure you have an ODBC Driver for SQL Server installed (ODBC Driver 17+ recomme
 
 * * * * *
 
-Project Resources
------------------
-
--   `data/`: Sample ERP and CRM CSV files
-
--   `sql/`: All ETL and modeling SQL scripts
-
--   `notebooks/`: Final analysis using Jupyter
-
--   `diagrams/`: Architecture & Data Models (Draw.io format)
-
--   `docker/`: Configuration files if needed
-
--   `docs/`: Project notes and documentation
-
-* * * * *
-
 Future Work
 -----------
 
