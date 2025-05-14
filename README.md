@@ -6,8 +6,6 @@ Overview
 
 This project demonstrates how to build a modern, cloud-ready data warehouse using **SQL Server hosted in Docker**, modeled around the **Medallion Architecture (Bronze, Silver, Gold layers)**. It simulates a business use case by consolidating sales data from two systems --- ERP and CRM --- delivered as CSV files. The pipeline transforms raw data into analytical insights through dimensional modeling and structured ETL workflows.
 
-This setup is ideal for developers, data engineers, or analysts looking to understand the complete lifecycle of enterprise data management using open technologies.
-
 * * * * *
 
 Architecture
