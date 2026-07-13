@@ -75,14 +75,14 @@ BEGIN
     PRINT '============================================';
 
     -- CRM tables
-    EXEC bronze.load_single_table 'bronze.crm_cust_info', '/DWDM_Prj/datasets/source_crm/cust_info.csv';
-    EXEC bronze.load_single_table 'bronze.crm_prd_info', '/DWDM_Prj/datasets/source_crm/prd_info.csv';
-    EXEC bronze.load_single_table 'bronze.crm_sales_details', '/DWDM_Prj/datasets/source_crm/sales_details.csv';
+    EXEC bronze.load_single_table 'bronze.crm_cust_info', '/project/datasets/source_crm/cust_info.csv';
+    EXEC bronze.load_single_table 'bronze.crm_prd_info', '/project/datasets/source_crm/prd_info.csv';
+    EXEC bronze.load_single_table 'bronze.crm_sales_details', '/project/datasets/source_crm/sales_details.csv';
 
     -- ERP tables
-    EXEC bronze.load_single_table 'bronze.erp_cust_az12', '/DWDM_Prj/datasets/source_erp/CUST_AZ12.csv';
-    EXEC bronze.load_single_table 'bronze.erp_loc_a101', '/DWDM_Prj/datasets/source_erp/LOC_A101.csv';
-    EXEC bronze.load_single_table 'bronze.erp_px_cat_g1v2', '/DWDM_Prj/datasets/source_erp/PX_CAT_G1V2.csv';
+    EXEC bronze.load_single_table 'bronze.erp_cust_az12', '/project/datasets/source_erp/CUST_AZ12.csv';
+    EXEC bronze.load_single_table 'bronze.erp_loc_a101', '/project/datasets/source_erp/LOC_A101.csv';
+    EXEC bronze.load_single_table 'bronze.erp_px_cat_g1v2', '/project/datasets/source_erp/PX_CAT_G1V2.csv';
 
     PRINT '============================================';
     PRINT 'Bronze Layer Load Complete';

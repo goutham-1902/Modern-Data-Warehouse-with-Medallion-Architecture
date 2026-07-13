@@ -1,210 +1,320 @@
-Modern Data Warehouse Project with SQL Server (Docker-Based)
-============================================================
+# Modern Data Warehouse with Medallion Architecture
 
-Overview
---------
+A reproducible educational data-warehouse implementation that consolidates six CRM and ERP CSV extracts into a SQL Server star schema. The project demonstrates full-refresh ingestion, data standardization, source-system reconciliation, dimensional modelling, quality controls, and notebook-based analysis.
 
-This project demonstrates how to build a modern, cloud-ready data warehouse using **SQL Server hosted in Docker**, modeled around the **Medallion Architecture (Bronze, Silver, Gold layers)**. It simulates a business use case by consolidating sales data from two systems --- ERP and CRM --- delivered as CSV files. The pipeline transforms raw data into analytical insights through dimensional modeling and structured ETL workflows.
+> **Scope:** This is a local, snapshot-oriented reference implementation. It uses relational SQL Server schemas named Bronze, Silver, and Gold; it is not a distributed lakehouse or a production cloud platform.
 
-* * * * *
+## Architecture
 
-Architecture
-------------
+```mermaid
+flowchart LR
+    A["CRM CSVs<br/>customers, products, sales"] --> B["Bronze schema<br/>raw landing tables"]
+    C["ERP CSVs<br/>demographics, location, categories"] --> B
+    B --> D["Silver schema<br/>cleaning and conformance"]
+    D --> E["Gold schema<br/>dim_customers"]
+    D --> F["Gold schema<br/>dim_products"]
+    D --> G["Gold schema<br/>fact_sales"]
+    E --> H["Jupyter analysis"]
+    F --> H
+    G --> H
+    I["Machine-readable<br/>quality checks"] -. validates .-> D
+    I -. validates .-> E
+    I -. validates .-> F
+    I -. validates .-> G
+```
 
-**Medallion Architecture** is followed to ensure clarity, scalability, and data quality:
+| Layer | Purpose | Physical implementation | Load strategy |
+|---|---|---|---|
+| Bronze | Preserve source extracts at their original grain | Six SQL Server tables | Truncate and bulk reload |
+| Silver | Deduplicate, standardize, repair, and reconcile | Six SQL Server tables | Truncate and transform from Bronze |
+| Gold | Publish a business-facing star schema | Two dimension views and one fact view | Virtual views over Silver |
 
--   **Bronze Layer:**\
-    Raw ingestion of ERP and CRM CSV files, minimal transformation for traceability.
+## Project objectives
 
--   **Silver Layer:**\
-    Cleansing (null handling, format normalization), deduplication, and joining of CRM and ERP data.
+- Consolidate CRM and ERP extracts into a consistent analytical model.
+- Preserve source traceability while applying explicit cleaning rules.
+- Resolve cross-system key and domain inconsistencies.
+- Enforce customer, product, sales, and referential-integrity checks.
+- Expose reproducible Gold-layer KPIs and exploratory analysis.
+- Demonstrate where an educational full-refresh design differs from a production warehouse.
 
--   **Gold Layer:**\
-    Dimensional modeling into Fact and Dimension tables ready for analytics and business intelligence.
+## Data sources and provenance
 
-* * * * *
+The six bundled files are educational extracts from the [Data With Baraa SQL Data Warehouse Project](https://github.com/DataWithBaraa/sql-data-warehouse-project). Their SHA-256 hashes match the upstream files exactly; see [`ATTRIBUTION.md`](ATTRIBUTION.md).
 
-Tech Stack
-----------
+| Source file | Intended grain | Rows | Notable raw conditions |
+|---|---|---:|---|
+| `source_crm/cust_info.csv` | Customer-master version | 18,494 | 4 null IDs and 6 duplicate-ID excess rows |
+| `source_crm/prd_info.csv` | Product version | 397 | 2 missing costs and 17 missing product-line codes |
+| `source_crm/sales_details.csv` | Sales order line | 60,398 | Missing/invalid amounts, prices, and 19 order dates |
+| `source_erp/CUST_AZ12.csv` | Customer demographics | 18,484 | Missing gender values and prefixed customer IDs |
+| `source_erp/LOC_A101.csv` | Customer location | 18,484 | 332 missing country values and punctuated IDs |
+| `source_erp/PX_CAT_G1V2.csv` | Product-category lookup | 37 | CRM/ERP pedal-category key mismatch |
 
--   SQL Server (Azure SQL Edge via Docker)
+These files represent teaching data, not current operational CRM, ERP, customer, or financial records.
 
--   SQL Server Management Studio (SSMS) / VS Code SQL Tools Extension
+## Methodology
 
--   Python + Jupyter Notebook
+### Bronze: raw ingestion
 
--   Pandas, pyodbc (for DB connection and querying)
+[`warehouse_queries/bronze/ddl_bronze.sql`](warehouse_queries/bronze/ddl_bronze.sql) creates source-aligned landing tables. [`warehouse_queries/bronze/load_bronze.sql`](warehouse_queries/bronze/load_bronze.sql) truncates each table and bulk-loads the mounted CSV under `/project/datasets/`.
 
--   Draw.io (Data Modeling & Architecture Diagrams)
+This design is repeatable for a static snapshot, but it does not preserve ingestion history or support incremental loads.
 
--   GitHub (Version Control)
+### Silver: cleaning and conformance
 
--   Notion (Documentation)
+[`warehouse_queries/silver/proc_load_silver.sql`](warehouse_queries/silver/proc_load_silver.sql) applies the following rules:
 
-* * * * *
+| Entity | Transformation |
+|---|---|
+| Customers | Remove null IDs; retain the newest row per `cst_id`; trim names; standardize marital status and gender |
+| Products | Split compound product keys; replace null cost with zero; standardize product line; derive effective end dates with `LEAD` |
+| Sales | Parse integer dates; repair non-positive, missing, or inconsistent sales and price values |
+| ERP demographics | Remove `NAS` key prefixes; reject future birthdates; standardize gender |
+| ERP locations | Remove key hyphens; normalize Germany and United States codes; replace missing country with `n/a` |
+| ERP categories | Trim lookup fields and standardize the CRM `CO_PE` key to ERP `CO_PD` for Components / Pedals |
 
-ETL Pipeline Breakdown
-----------------------
+Before harmonization, only 288 of 295 active products match the ERP category lookup. The explicit `CO_PE` → `CO_PD` rule raises expected active-product coverage to 295 of 295.
 
-Each layer of the ETL process builds on the previous, transitioning data from raw to refined:
+### Gold: star schema
 
-1.  **Extract:** Load CSV data into SQL Server's Bronze Layer.
+[`warehouse_queries/gold/ddl_gold.sql`](warehouse_queries/gold/ddl_gold.sql) creates three analytical views:
 
-2.  **Transform:** Cleanse and merge CRM and ERP data in Silver Layer.
+| Gold view | Grain | Key fields | Rows expected from this snapshot |
+|---|---|---|---:|
+| `gold.dim_customers` | One row per customer | `customer_key`, `customer_id`, `customer_number` | 18,484 |
+| `gold.dim_products` | One row per active product | `product_key`, `product_id`, `product_number` | 295 |
+| `gold.fact_sales` | One row per sales line | `order_number`, `customer_key`, `product_key` | 60,398 |
 
-3.  **Load:** Model structured Fact and Dimension tables in Gold Layer.
+CRM is used as the primary customer source. ERP contributes birthdate and location, while ERP gender is used when CRM gender is unavailable.
 
-4.  **Analyze:** Use Jupyter Notebook to query and visualize insights directly from Gold Layer.
+![Expected record flow across the three warehouse layers](assets/warehouse_record_flow.png)
 
-Key transformations include:
+## Data-quality framework
 
--   Date parsing & normalization
+The quality procedures now return one structured result set with `check_name`, `severity`, and `failed_rows`, allowing the notebook or CI to distinguish errors from documented warnings.
 
--   Null handling & deduplication
+- [`warehouse_queries/Inspect/test_silver.sql`](warehouse_queries/Inspect/test_silver.sql) checks keys, domains, category coverage, costs, dates, measure arithmetic, and ERP completeness.
+- [`warehouse_queries/Inspect/test_gold.sql`](warehouse_queries/Inspect/test_gold.sql) checks surrogate and natural keys, dimension enrichment, fact foreign keys, orphan records, dates, and measures.
 
--   Surrogate key generation
+### Validated source and transformation findings
 
--   Merging customer and sales datasets
+| Finding | Evidence | Interpretation |
+|---|---:|---|
+| Customer deduplication | 18,494 raw → 18,484 conformed | 4 null-ID rows removed and duplicate customer versions resolved |
+| Product lifecycle filter | 397 Silver versions → 295 active Gold products | Gold publishes the latest active product version only |
+| Customer foreign-key coverage | 60,398 / 60,398 sales lines | All sales lines map to a conformed customer |
+| Product foreign-key coverage | 60,398 / 60,398 sales lines | All sales lines map to an active product |
+| Sales-amount repairs | 23 rows | Invalid or inconsistent amounts are recalculated from quantity × absolute price |
+| Price repairs | 12 rows | Missing or non-positive prices are derived from sales ÷ quantity |
+| Missing order dates | 19 rows, $4,992 revenue | Retained in the fact view but excluded from time-series analysis |
+| Category coverage after harmonization | 295 / 295 active products | The explicit pedal-key rule resolves the source-system mismatch |
 
-* * * * *
+The exact source-derived values are stored in [`analysis_outputs/validated_metrics.csv`](analysis_outputs/validated_metrics.csv) and regenerated by [`scripts/generate_readme_assets.py`](scripts/generate_readme_assets.py).
 
-Analytics & Insights
---------------------
+## Analytical results
 
-Using Python and Jupyter, the Gold Layer enables advanced analysis:
+The following metrics are independently reproduced from the committed CSVs using the same transformations as the SQL pipeline:
 
--   Top-performing products and regions
+| Metric | Result |
+|---|---:|
+| Total revenue | $29,356,250 |
+| Distinct orders | 27,659 |
+| Customers represented in sales | 18,484 |
+| Average order value | $1,061.36 |
+| Average revenue per customer | $1,588.20 |
+| Order-date range | 29 December 2010 – 28 January 2014 |
 
--   Monthly sales trends
+### Revenue composition
 
--   Customer segmentation by sales volume
+| Product category | Revenue | Share |
+|---|---:|---:|
+| Bikes | $28,316,272 | 96.46% |
+| Accessories | $700,262 | 2.39% |
+| Clothing | $339,716 | 1.16% |
 
-These insights support data-driven decisions and simulate real-world business intelligence use cases.
+| Product line | Revenue | Share |
+|---|---:|---:|
+| Road | $14,622,850 | 49.81% |
+| Mountain | $10,250,982 | 34.92% |
+| Touring | $3,879,135 | 13.21% |
+| Other Sales | $603,283 | 2.06% |
 
-* * * * *
+The dataset is highly concentrated in Bikes and in Road/Mountain product lines. These are descriptive properties of the teaching snapshot and should not be generalized to a real company.
 
-Installation & Setup
---------------------
+### Monthly sales
+
+![Monthly sales revenue across valid order dates](assets/monthly_sales_revenue.png)
+
+The trend contains 38 monthly observations. December 2010 and January 2014 are partial months, so their totals are not directly comparable with complete periods. Nineteen lines with invalid source order dates are excluded from the chart.
+
+## Reproduction
 
 ### Prerequisites
 
--   Docker installed on your machine
+- Docker Desktop or another Docker-compatible engine
+- Python 3.10 or newer
+- Microsoft ODBC Driver 18 for SQL Server
+- A SQL client or JupyterLab
 
--   SQL Server Management Studio (SSMS) or VS Code with SQL Tools Extension
+The container uses Microsoft's current SQL Server 2022 Linux image. Consult the [official SQL Server container quickstart](https://learn.microsoft.com/en-us/sql/linux/install-upgrade/quickstart-install-docker) for platform-specific requirements.
 
--   Python 3.8+ with pip
+### 1. Configure the environment
 
--   Jupyter Notebook or Jupyter Lab
+```bash
+cp .env.example .env
+```
 
-### Step 1: Launch SQL Server via Docker
+Replace the example password in `.env` with a strong local development password. Then export the same variables for Jupyter:
 
-Run the following command in your terminal:
+```bash
+set -a
+source .env
+set +a
+```
 
-bash
+The real `.env` file is ignored by Git.
 
-CopyEdit
+### 2. Start SQL Server
 
-`docker run\
-  -e "ACCEPT_EULA=1"\
-  -e "MSSQL_SA_PASSWORD=MyStrongPass123"\
-  -e "MSSQL_PID=Developer"\
-  -p 1433:1433\
-  -v ~/projects/my_dwh_prj:/my_dwh_prj\
-  --name sqlserver\
-  -d mcr.microsoft.com/azure-sql-edge`
+```bash
+docker compose up -d
+docker compose ps
+```
 
-This spins up a SQL Server instance inside a container, making your project portable and replicable across machines or teams.
+The repository is mounted read-only at `/project`, matching the paths used by the Bronze loader. The named `sqlserver_data` volume preserves the SQL Server data directory between container restarts.
 
-> **Note**: You can stop and start the server using `docker stop sqlserver` and `docker start sqlserver`.
+If the Docker Compose plugin is unavailable, use the equivalent command:
 
-* * * * *
+```bash
+docker volume create medallion_sqlserver_data
+docker run --platform linux/amd64 \
+  --name medallion-sqlserver \
+  --env-file .env \
+  -e ACCEPT_EULA=Y \
+  -e MSSQL_PID=Developer \
+  -p 1433:1433 \
+  -v "$PWD":/project:ro \
+  -v medallion_sqlserver_data:/var/opt/mssql \
+  -d mcr.microsoft.com/mssql/server:2022-latest
+```
 
-### Step 2: Connect to SQL Server
+> `compose.yaml` requests `linux/amd64`. Apple Silicon hosts may therefore use emulation and run more slowly.
 
-#### Option A: Using SSMS
+### 3. Create the Python environment
 
--   Open SSMS and connect to:
+```bash
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
 
-    -   **Server name:** `localhost,1433`
+### 4. Run the tutorial notebook
 
-    -   **Authentication:** SQL Server Authentication
+```bash
+jupyter lab analysis.ipynb
+```
 
-    -   **Login:** `sa`
+Run every cell from the repository root. The notebook:
 
-    -   **Password:** `MyStrongPass123`
+1. drops and recreates `data_warehouse_prj`;
+2. defines the schemas, tables, loaders, Gold views, and quality procedures;
+3. executes the Bronze and Silver full-refresh loads;
+4. fails immediately on SQL errors;
+5. reports Silver and Gold quality results; and
+6. calculates Gold KPIs and charts.
 
-#### Option B: Using VS Code
+> **Destructive operation:** the architecture cell drops the entire development database. Do not run it against an environment containing data that must be retained.
 
--   Install the **SQL Server (mssql)** extension.
+### 5. Regenerate README evidence
 
--   Create a new connection using the same credentials as above.
+```bash
+python scripts/generate_readme_assets.py
+```
 
-* * * * *
+This command validates the committed source data, rewrites `analysis_outputs/validated_metrics.csv`, and regenerates both README figures.
 
-### Step 3: Install Python Dependencies
+## Manual SQL execution order
 
-Create a virtual environment and install required libraries:
+If the notebook is not used, execute the scripts and procedures in this order:
 
-bash
+1. `warehouse_queries/architecture.sql`
+2. `warehouse_queries/bronze/ddl_bronze.sql`
+3. `warehouse_queries/silver/ddl_silver.sql`
+4. `warehouse_queries/bronze/load_bronze.sql`
+5. `warehouse_queries/silver/proc_load_silver.sql`
+6. `warehouse_queries/gold/ddl_gold.sql`
+7. `warehouse_queries/Inspect/test_silver.sql`
+8. `warehouse_queries/Inspect/test_gold.sql`
+9. `EXEC sp_create_bronze_tables;`
+10. `EXEC sp_create_silver_tables;`
+11. `EXEC bronze.load_bronze;`
+12. `EXEC silver.load_silver;`
+13. `EXEC sp_create_gold_views;`
+14. `EXEC sp_test_silver;`
+15. `EXEC sp_test_gold;`
 
-CopyEdit
+## Repository structure
 
-`python -m venv venv
-source venv/bin/activate  # For Windows: venv\Scripts\activate
+```text
+├── datasets/
+│   ├── source_crm/                 # Customer, product, and sales extracts
+│   └── source_erp/                 # Demographics, location, and category extracts
+├── warehouse_queries/
+│   ├── bronze/                     # Landing-table DDL and bulk loader
+│   ├── silver/                     # Conformed-table DDL and transformation procedure
+│   ├── gold/                       # Star-schema view definitions
+│   ├── Inspect/                    # Silver and Gold quality procedures
+│   └── architecture.sql            # Destructive development database setup
+├── analysis.ipynb                  # Secure, fail-fast build and analysis tutorial
+├── scripts/generate_readme_assets.py
+├── analysis_outputs/               # Validated source-derived metrics
+├── assets/                         # README figures
+├── compose.yaml                    # SQL Server 2022 development service
+├── .env.example                    # Non-secret connection template
+├── requirements.txt                # Notebook and figure dependencies
+├── ATTRIBUTION.md                  # Upstream source and dataset hashes
+└── LICENSE                         # MIT notices for upstream and adaptations
+```
 
-pip install pandas pyodbc jupyter notebook`
+## Reproducibility status
 
-Ensure you have an ODBC Driver for SQL Server installed (ODBC Driver 17+ recommended).
+| Check | Status |
+|---|---|
+| Dataset hashes versus attributed upstream | Verified |
+| Source profile and transformation assertions | Passed |
+| README figure inspection | Passed |
+| Notebook JSON and Python syntax | Passed |
+| SQL Server engine execution in automated CI | Not configured; run the notebook locally |
 
-* * * * *
+## Limitations and production gaps
 
-### Step 4: Run SQL Scripts and Notebooks
+- Full-refresh truncation is appropriate only for this static educational snapshot.
+- Gold objects are views; `ROW_NUMBER()` keys are not durable warehouse surrogate keys.
+- There is no date dimension, slowly changing dimension strategy, lineage store, or run-audit table.
+- The loaders do not implement incremental ingestion, late-arriving data handling, or reject quarantine.
+- Quality procedures run on demand and are not yet enforced in CI.
+- Credentials use the `sa` development account; production deployments should use least-privilege identities and a secret manager.
+- Monthly trends exclude the 19 invalid order-date rows and include two partial endpoint months.
+- Docker networking, storage, backup, recovery, monitoring, and resource limits require production-specific design.
 
-1.  Run SQL scripts for schema creation and ETL from the repository in SSMS or VS Code.
+## Recommended extensions
 
-2.  Open the provided Jupyter notebook and execute cells to:
+1. Persist dimension surrogate keys and define a Type 1 or Type 2 historization policy.
+2. Add a date dimension, fiscal calendar, and explicit unknown-member records.
+3. Introduce incremental loads with watermarking and run-level audit metadata.
+4. Quarantine rejected source rows rather than converting every issue in place.
+5. Execute the quality procedures in CI against an ephemeral SQL Server container.
+6. Add orchestration with Airflow, Dagster, or Azure Data Factory and publish the Gold model to a BI layer.
 
-    -   Connect to the SQL Server
+## Author
 
-    -   Run queries on the Gold Layer
+**Goutham SDS Kodali**
 
-    -   Visualize business insights
+- [LinkedIn](https://www.linkedin.com/in/sds-kodali/)
+- [GitHub](https://github.com/goutham-1902)
 
-* * * * *
+## License and attribution
 
-Future Work
------------
-
-To extend this project into a production-grade data solution:
-
--   **Azure Integration**: Connect SQL Server to Azure Blob Storage for scalable data ingestion.
-
--   **Web Scraping Pipeline**: Integrate a Python-based web scraping pipeline to collect external data and feed it through the same ETL process.
-
--   **Automation & Scheduling**: Add orchestration using Apache Airflow or Azure Data Factory.
-
--   **Power BI or Looker**: Connect Gold Layer to BI tools for dashboarding.
-
-* * * * *
-
-Skills Demonstrated
--------------------
-
--   Data Architecture & Modeling
-
--   SQL Development & Optimization
-
--   ETL Pipeline Engineering
-
--   Python + SQL Integration
-
--   Docker-based Infrastructure
-
--   Business Intelligence and Analytics
-
-* * * * *
-
-License
--------
-
-This project is provided under the MIT License.
+The repository is distributed under the [MIT License](LICENSE). It preserves the upstream copyright notice for Baraa Khatib Salkini and identifies Goutham SDS Kodali's adaptations separately. See [`ATTRIBUTION.md`](ATTRIBUTION.md) for source provenance and exact dataset hashes.

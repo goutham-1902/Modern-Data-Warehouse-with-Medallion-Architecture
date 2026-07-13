@@ -109,9 +109,14 @@ BEGIN
         )
         SELECT
             prd_id,
-            REPLACE(SUBSTRING(prd_key, 1, 5), '-', '_'),
+            CASE
+                -- The CRM source encodes pedal products as CO-PE while the ERP
+                -- category lookup uses CO_PD for Components / Pedals.
+                WHEN REPLACE(SUBSTRING(prd_key, 1, 5), '-', '_') = 'CO_PE' THEN 'CO_PD'
+                ELSE REPLACE(SUBSTRING(prd_key, 1, 5), '-', '_')
+            END,
             SUBSTRING(prd_key, 7, LEN(prd_key)),
-            prd_nm,
+            TRIM(prd_nm),
             ISNULL(prd_cost, 0),
             CASE 
                 WHEN UPPER(TRIM(prd_line)) = 'M' THEN 'Mountain'
@@ -222,10 +227,10 @@ BEGIN
             maintenance
         )
         SELECT
-            id,
-            cat,
-            subcat,
-            maintenance
+            TRIM(id),
+            TRIM(cat),
+            TRIM(subcat),
+            TRIM(maintenance)
         FROM bronze.erp_px_cat_g1v2;
         SET @end_time = GETDATE();
         PRINT '>> Load Duration: ' + CAST(DATEDIFF(SECOND, @start_time, @end_time) AS NVARCHAR) + ' seconds';
@@ -244,6 +249,7 @@ BEGIN
         PRINT 'Error Number : ' + CAST(ERROR_NUMBER() AS NVARCHAR);
         PRINT 'Error State  : ' + CAST(ERROR_STATE() AS NVARCHAR);
         PRINT '==========================================';
+        THROW;
     END CATCH
 END;
 GO
